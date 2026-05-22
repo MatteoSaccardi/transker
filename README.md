@@ -3,7 +3,7 @@
 `transker` contains numerical experiments and plotting scripts for transition
 kernels between smeared spectral densities. The repository includes reusable
 Python modules plus reproducibility scripts that generate the plots of
-the paper [Kernel Transformations etc...](https://arxiv.org/abs/2605.01010).
+the paper [Kernel Transformations etc...](https://arxiv.org/abs/1504.00108).
 [INSERT CORRECT LINK!!!!!]
 
 The main workflows currently cover:
