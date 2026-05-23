@@ -1,13 +1,16 @@
 import numpy
 from tqdm.auto import tqdm
-import cvxpy as cp
 import os
 import scipy
 import shutil
 
 import sys
 sys.path.append("../")
-from modules.sip import solve_sip_exchange, compute_sip_certificates
+from modules.bounds import BoundedData
+from modules.kernels import cauchy_np as cauchy
+from modules.kernels import cauchy_to_gaussian_kernel_np
+from modules.kernels import gaussian_np as gaussian
+from modules.transition import SIPTransition, TransitionKernelProblem
 
 import matplotlib.pyplot as plt
 plt.rcParams.update({'font.size': 16})
@@ -18,16 +21,6 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
 plot_folder = '../paperplots/sip'
-
-# ==============================================================================
-# Kernel and model spectral density definitions
-# ==============================================================================
-
-def cauchy(w, w1, eps):
-    return (eps / numpy.pi) / ((w - w1)**2 + eps**2)
-
-def gaussian(w, w1, sigma):
-    return 1 / numpy.sqrt(2 * numpy.pi * sigma**2) * numpy.exp(- (w - w1)**2 / (2 * sigma**2))
 
 # Model Spectral Density Parameters
 ms = [0.5, 4.0]
@@ -45,110 +38,54 @@ def correction(omega, eps):
 def rho_sigma(omega, sigma):
     return sum([As[i] * gaussian(omega, ms[i], sigma) for i in range(len(ms))])
 
-def compute_sip_bounds_at_eps(eps, omega_t, sigma_t, alpha_grid, dense_grid):
-    # 1. Generate Input Data at THIS epsilon
+def make_c2g_bounded_data(eps, alpha_grid):
     r_exact = numpy.array([rho_eps(a, eps) for a in alpha_grid])
     r_plus  = numpy.array([r * correction(a, eps) for r, a in zip(r_exact, alpha_grid)])
     r_minus = numpy.array([r / correction(a, eps) for r, a in zip(r_exact, alpha_grid)])
-    
-    r_bar = (r_plus + r_minus) / 2.0
-    r_delta = (r_plus - r_minus) / 2.0
-    
+    return BoundedData(grid=alpha_grid, exact=r_exact, upper=r_plus, lower=r_minus)
+
+def make_c2g_sip_problem(eps, omega_t, sigma_t, alpha_grid, dense_grid):
+    data = make_c2g_bounded_data(eps, alpha_grid)
     target_func = lambda w: gaussian(w, omega_t, sigma_t)
     basis_func = lambda w, alpha: cauchy(w, alpha, eps)
+    return TransitionKernelProblem(
+        param_grid=alpha_grid,
+        omega_grid=dense_grid,
+        data=data,
+        target_func=target_func,
+        basis_func=basis_func,
+    )
 
-    # 2. Upper Bound
-    _, _, val_up, diff_up, Phi_d = solve_sip_exchange(
-        param_centers=alpha_grid, 
-        rho_bar=r_bar, 
-        rho_delta=r_delta, 
-        omega_dense=dense_grid, 
-        target_func=target_func, 
-        basis_func=basis_func, 
-        bound_type='upper', 
+def solve_c2g_sip_interval(eps, omega_t, sigma_t, alpha_grid, dense_grid, max_iters=15, tol=1e-8):
+    problem = make_c2g_sip_problem(eps, omega_t, sigma_t, alpha_grid, dense_grid)
+    solver = SIPTransition(
+        problem,
         omega_active_init=alpha_grid,
         omega_bounds=(dense_grid[0], dense_grid[-1]),
-        tol=1e-8,
-        max_iters=15
+        tol=tol,
+        max_iters=max_iters,
     )
-    deltas_up = compute_sip_certificates(diff_up, Phi_d, bound_type='upper')
-    rig_up = numpy.min(val_up + deltas_up * r_plus)
-    
-    # 3. Lower Bound
-    _, _, val_low, diff_low, _ = solve_sip_exchange(
-        param_centers=alpha_grid, 
-        rho_bar=r_bar, 
-        rho_delta=r_delta, 
-        omega_dense=dense_grid, 
-        target_func=target_func, 
-        basis_func=basis_func, 
-        bound_type='lower', 
-        omega_active_init=alpha_grid,
-        omega_bounds=(dense_grid[0], dense_grid[-1]),
-        tol=1e-8,
-        max_iters=15
-    )
-    deltas_low = compute_sip_certificates(diff_low, Phi_d, bound_type='lower')
-    rig_low = numpy.max(val_low - deltas_low * r_plus)
-    
-    return rig_up, rig_low
+    return solver.solve_interval()
+
+def compute_sip_bounds_at_eps(eps, omega_t, sigma_t, alpha_grid, dense_grid):
+    interval = solve_c2g_sip_interval(eps, omega_t, sigma_t, alpha_grid, dense_grid)
+    return interval.upper.rigorous, interval.lower.rigorous
 
 # c2g transition kernel
 def K_gauss_static(w, E, eps, sig):
     """Analytic Cauchy-to-Gaussian transition kernel."""
-    z = (eps - 1j * (w - E)) / numpy.sqrt(2 * sig**2)
-    return 1 / numpy.sqrt(2 * numpy.pi * sig**2) * numpy.real(numpy.exp(z**2) * (1 + scipy.special.erf(z)))
+    return cauchy_to_gaussian_kernel_np(w, E, eps, sig)
 
 
 def optimize_sip_eps(omega_t, sigma_t, alpha_grid, dense_grid, max_iters=100, tol=1e-7):
     """
     Computes the rigorous SIP width for a given epsilon, using given tolerances.
     """
-    target_func = lambda w: gaussian(w, omega_t, sigma_t)
     def sip_width_cost(eps):
-        r_ex = numpy.array([rho_eps(a, eps) for a in alpha_grid])
-        r_pl = numpy.array([r * correction(a, eps) for r, a in zip(r_ex, alpha_grid)])
-        r_mi = numpy.array([r / correction(a, eps) for r, a in zip(r_ex, alpha_grid)])
-        
-        r_bar = (r_pl + r_mi) / 2.0
-        r_delta = (r_pl - r_mi) / 2.0
-        
-        basis_func = lambda w, alpha: cauchy(w, alpha, eps)
-        # Upper Bound
-        _, _, val_up, diff_up, Phi_d = solve_sip_exchange(
-            param_centers=alpha_grid, 
-            rho_bar=r_bar, 
-            rho_delta=r_delta, 
-            omega_dense=dense_grid, 
-            target_func=target_func, 
-            basis_func=basis_func, 
-            bound_type='upper', 
-            omega_active_init=alpha_grid,
-            omega_bounds=(dense_grid[0], dense_grid[-1]),
-            tol=tol, 
-            max_iters=max_iters
+        interval = solve_c2g_sip_interval(
+            eps, omega_t, sigma_t, alpha_grid, dense_grid, max_iters=max_iters, tol=tol
         )
-        deltas_up = compute_sip_certificates(diff_up, Phi_d, bound_type='upper')
-        rig_up = numpy.min(val_up + deltas_up * r_pl)
-        
-        # Lower Bound
-        _, _, val_low, diff_low, Phi_d = solve_sip_exchange(
-            param_centers=alpha_grid, 
-            rho_bar=r_bar, 
-            rho_delta=r_delta, 
-            omega_dense=dense_grid, 
-            target_func=target_func, 
-            basis_func=basis_func, 
-            bound_type='lower', 
-            omega_active_init=alpha_grid,
-            omega_bounds=(dense_grid[0], dense_grid[-1]),
-            tol=tol, 
-            max_iters=max_iters
-        )
-        deltas_low = compute_sip_certificates(diff_low, Phi_d, bound_type='lower')
-        rig_low = numpy.max(val_low - deltas_low * r_pl)
-        
-        return rig_up - rig_low
+        return interval.width
     
     # Search for the optimal eps in the range [0.5, 3.5] using loose tolerance
     res = scipy.optimize.minimize_scalar(
@@ -157,44 +94,10 @@ def optimize_sip_eps(omega_t, sigma_t, alpha_grid, dense_grid, max_iters=100, to
     eps_star = res.x
     
     # Re-evaluate the bounds exactly at eps_star to extract up/low values
-    r_ex = numpy.array([rho_eps(a, eps_star) for a in alpha_grid])
-    r_pl = numpy.array([r * correction(a, eps_star) for r, a in zip(r_ex, alpha_grid)])
-    r_mi = numpy.array([r / correction(a, eps_star) for r, a in zip(r_ex, alpha_grid)])
-    r_bar = (r_pl + r_mi) / 2.0
-    r_delta = (r_pl - r_mi) / 2.0
-    
-    basis_func = lambda w, alpha: cauchy(w, alpha, eps_star)
-    _, _, v_up, d_up, Pd = solve_sip_exchange(
-        param_centers=alpha_grid, 
-        rho_bar=r_bar, 
-        rho_delta=r_delta, 
-        omega_dense=dense_grid,
-        target_func=target_func, 
-        basis_func=basis_func, 
-        bound_type='upper', 
-        omega_active_init=alpha_grid,
-        omega_bounds=(dense_grid[0], dense_grid[-1]),
-        tol=tol, 
-        max_iters=max_iters
+    interval = solve_c2g_sip_interval(
+        eps_star, omega_t, sigma_t, alpha_grid, dense_grid, max_iters=max_iters, tol=tol
     )
-    r_up = numpy.min(v_up + compute_sip_certificates(d_up, Pd, 'upper') * r_pl)
-    
-    _, _, v_lo, d_lo, _ = solve_sip_exchange(
-        param_centers=alpha_grid, 
-        rho_bar=r_bar, 
-        rho_delta=r_delta, 
-        omega_dense=dense_grid,
-        target_func=target_func, 
-        basis_func=basis_func, 
-        bound_type='lower', 
-        omega_active_init=alpha_grid,
-        omega_bounds=(dense_grid[0], dense_grid[-1]),
-        tol=tol, 
-        max_iters=max_iters
-    )
-    r_lo = numpy.max(v_lo - compute_sip_certificates(d_lo, Pd, 'lower') * r_pl)
-    
-    return eps_star, r_up, r_lo
+    return eps_star, interval.upper.rigorous, interval.lower.rigorous
 
 def optimize_rk_eps(omega_t, sigma_t, grid):
     """
@@ -264,21 +167,10 @@ def main():
     sigma_target = 1.0
     omega_target = 2.5
 
-    target_func = lambda w: gaussian(w, omega_target, sigma_target)
-
     omega_dense = numpy.linspace(omega_target - 8.0, omega_target + 8.0, 1000)
 
     # For the input data, let's take 200 discrete measurements spread across the grid
     alpha_centers = numpy.linspace(omega_target - 8.0, omega_target + 8.0, 300)
-
-    # Generate exact data and bounds at the alpha centers
-    rhos_exact = numpy.array([rho_eps(a, eps_fixed) for a in alpha_centers])
-    rhos_plus  = numpy.array([r * correction(a, eps_fixed) for r, a in zip(rhos_exact, alpha_centers)])
-    rhos_minus = numpy.array([r / correction(a, eps_fixed) for r, a in zip(rhos_exact, alpha_centers)])
-
-    # Convert to SIP format: central value and absolute error
-    rho_bar = (rhos_plus + rhos_minus) / 2.0
-    rho_delta = (rhos_plus - rhos_minus) / 2.0
 
     # --- Setup the Epsilon Scan ---
     omega_target = 2.5

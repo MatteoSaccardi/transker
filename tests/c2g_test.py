@@ -1,6 +1,5 @@
 import numpy
 from tqdm import tqdm
-import mpmath
 import scipy
 import random
 import shutil
@@ -8,7 +7,11 @@ random.seed(42)
 
 import sys
 sys.path.append("../")
+from modules.bounds import BoundedData
 from modules.c2g import c2g
+from modules.kernels import cauchy_mp as cauchy
+from modules.kernels import cauchy_to_gaussian_kernel_mp as K_gauss
+from modules.kernels import gaussian_mp as gaussian
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -23,25 +26,12 @@ import os
 
 plot_folder = '../paperplots/c2g'
 
-# ==============================================================================
-# Kernel Definitions
-# ==============================================================================
-
-def K_gauss(w, E, eps, sigma):
-    '''
-    Transition kernel from a Cauchy smearing with width eps and center w 
-    to a Gaussian smearing with width sigma and center E
-    '''
-    z = ( eps - 1j * (w-E) ) / mpmath.sqrt(2*sigma**2)
-    return 1 / mpmath.sqrt(2*mpmath.pi*sigma**2) * \
-        ( mpmath.exp(z**2) * (1+mpmath.erf(z)) ).real
-
-def cauchy(w,w1,eps): 
-    return (eps/mpmath.pi) /  ( (w-w1)**2 + eps**2 )
-
-def gaussian(w,w1,sigma): 
-    return 1/mpmath.sqrt(2*mpmath.pi*sigma**2) * \
-        mpmath.exp( - (w-w1)**2 / (2*sigma**2) )
+def make_c2g_bounded_data(omega_grid, eps, ms, As, correction):
+    rho_eps = lambda omega: sum([As[i] * cauchy(omega, ms[i], eps) for i in range(len(ms))])
+    rhos = numpy.array([rho_eps(omega) for omega in omega_grid])
+    rhos_plus = numpy.array([r * correction(omega, eps) for r, omega in zip(rhos, omega_grid)])
+    rhos_minus = numpy.array([r / correction(omega, eps) for r, omega in zip(rhos, omega_grid)])
+    return BoundedData(grid=omega_grid, exact=rhos, upper=rhos_plus, lower=rhos_minus)
 
 def main():
     if not os.path.exists('../paperplots'):
@@ -99,19 +89,14 @@ def main():
     ms = [ 0.5, 4.0 ]
     As = [ 1.0, 2.0 ]
 
-    rho_eps = lambda omega: sum([ As[i] * cauchy(omega,ms[i],eps) \
-                                  for i in range(len(ms)) ])
-
     eps0 = lambda omega: 0.75 # mpmath.rand()
     p = 2
     correction = lambda omega, eps: 1 + (eps0(omega)/eps)**p
 
-    # central values
-    rhos = numpy.array([ rho_eps(omega) for omega in omegas ])
-    # upper bounds
-    rhos_plus = numpy.array([ r*correction(omega, eps) for r,omega in zip(rhos,omegas) ])
-    # lower bounds
-    rhos_minus = numpy.array([ r/correction(omega, eps) for r,omega in zip(rhos,omegas) ])
+    data = make_c2g_bounded_data(omegas, eps, ms, As, correction)
+    rhos = data.exact
+    rhos_plus = data.upper
+    rhos_minus = data.lower
     
     # Compute RK bounds
     Krhos = K_gauss_values * rhos
@@ -280,20 +265,16 @@ def main():
     uppers = numpy.zeros(len(epsilons))
     lowers = numpy.zeros(len(epsilons))
     for ieps,eps in enumerate(tqdm(epsilons)):
-        rho_eps = lambda omega: sum([ As[i] * cauchy(omega,ms[i],eps) for i in range(len(ms)) ])
+        data = make_c2g_bounded_data(omegas, eps, ms, As, correction)
 
-        rhos = numpy.array([ rho_eps(omega) for omega in omegas ])
-        rhos_plus = numpy.array([ r*correction(omega, eps) for r,omega in zip(rhos,omegas) ])
-        rhos_minus = numpy.array([ r/correction(omega, eps) for r,omega in zip(rhos,omegas) ])
-
-        gs = c2g(omegas, rhos, rhos_plus, rhos_minus, eps, use_mp=True)
+        gs = c2g(omegas, data.exact, data.upper, data.lower, eps, use_mp=True)
 
         res, up, low = gs.rho_gauss(omega1, sigma)
 
         width = up - low
 
-        upper = max(rhos_plus-rhos_minus) * numpy.trapezoid(abs(numpy.array(gs.Kvals)), omegas)
-        lower = numpy.trapezoid(abs(numpy.array(gs.Kvals) * (rhos_plus-rhos_minus)), omegas)
+        upper = max(data.width) * numpy.trapezoid(abs(numpy.array(gs.Kvals)), omegas)
+        lower = numpy.trapezoid(abs(numpy.array(gs.Kvals) * data.width), omegas)
 
         widths[ieps] = width
         uppers[ieps] = upper
@@ -342,18 +323,13 @@ def main():
     
     print('[c2g] Plot 4: Energy scan with optimized inputs. This will take 5 minutes...')
 
-    def width_at_eps(eps, omega1, sigma, print_progress=False):        
+    def width_at_eps(eps, omega1, sigma, omega_grid, print_progress=False):        
         if print_progress: 
             print(f'eps = {eps:.3f}', end='\r')
 
-        rho_eps = lambda omega: sum( As[i] * cauchy(omega, ms[i], eps) 
-                                    for i in range(len(ms)) )
-        
-        rhos = numpy.array([rho_eps(omega) for omega in omegas])
-        rhos_plus  = rhos * numpy.array([correction(omega,eps) for omega in omegas])
-        rhos_minus = rhos / numpy.array([correction(omega,eps) for omega in omegas])
+        data = make_c2g_bounded_data(omega_grid, eps, ms, As, correction)
 
-        gs = c2g( omegas, rhos, rhos_plus, rhos_minus, eps, use_mp=True )
+        gs = c2g(omega_grid, data.exact, data.upper, data.lower, eps, use_mp=True)
 
         _, up, low = gs.rho_gauss(omega1, sigma)
         return float(up - low)
@@ -372,18 +348,15 @@ def main():
     for iomega1,omega1 in enumerate(tqdm(omegas1)):
         omegas = numpy.linspace(omega1-8.0,omega1+10.0,1000)
 
-        res = scipy.optimize.minimize_scalar(lambda eps: width_at_eps(eps,omega1,sigma), 
+        res = scipy.optimize.minimize_scalar(lambda eps: width_at_eps(eps, omega1, sigma, omegas), 
                                              bounds=(0.02, 4.0), method='bounded', 
                                              options={'xatol': 1e-3})
         eps_star  = res.x
         eps_stars[iomega1] = eps_star
 
-        rho_eps = lambda omega: sum([ As[i] * cauchy(omega,ms[i],eps_star) for i in range(len(ms)) ])
-        rhos = numpy.array([ rho_eps(omega) for omega in omegas ])
-        rhos_plus = numpy.array([ r*correction(omega,eps_star) for r,omega in zip(rhos,omegas) ])
-        rhos_minus = numpy.array([ r/correction(omega,eps_star) for r,omega in zip(rhos,omegas) ])
+        data = make_c2g_bounded_data(omegas, eps_star, ms, As, correction)
 
-        gs = c2g(omegas, rhos, rhos_plus, rhos_minus, eps_star, use_mp=True)
+        gs = c2g(omegas, data.exact, data.upper, data.lower, eps_star, use_mp=True)
         res, up, low = gs.rho_gauss(omega1, sigma)
 
         uppers[iomega1] = up
@@ -404,8 +377,8 @@ def main():
     ax1.fill_between(omegas1, lowers, uppers, color='C1', alpha=0.3)
     ylims = ax1.get_ylim()
     for i in range(len(ms)):
-        ax.axvline(ms[i], 0, As[i] / max(As) * ylims[1] * 0.5, linestyle='--', 
-                   color='C3', linewidth=2)
+        ax1.axvline(ms[i], 0, As[i] / max(As) * ylims[1] * 0.5, linestyle='--', 
+                    color='C3', linewidth=2)
     ax1.set_ylim(ylims)
     ax1.legend(fontsize=24, loc='upper left')
     ax1.set_ylabel(r"$\rho_\sigma^{\mathtt g}(\omega')$", fontsize=24)    # ax1.grid()

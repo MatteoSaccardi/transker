@@ -1,29 +1,24 @@
 import numpy
-import scipy.linalg
 from tqdm import tqdm
-import scipy
-import mpmath
 import os
 import shutil
 
 import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 plt.rcParams.update({'font.size': 16})
 plt.rc('text', usetex=shutil.which("latex") is not None)
 plt.rc('font', family='serif')
 
 import sys
 sys.path.append("../")
-from modules.sip import solve_sip_exchange, compute_sip_certificates
+from modules.bounds import BoundedData
+from modules.kernels import cauchy_np as cauchy
+from modules.transition import RegulatedRKTransition, SIPTransition, TransitionKernelProblem
 
 plot_folder = '../paperplots/c2c_regulated'
 
 # ==============================================================================
 # Kernel and model spectral density definitions
 # ==============================================================================
-
-def cauchy(w, w1, eps):
-    return (eps / numpy.pi) / ((w - w1)**2 + eps**2)
 
 ms = [0.5, 4.0]
 As = [1.0, 2.0]
@@ -37,6 +32,19 @@ def eps0(omega):
 p = 2
 def correction(omega, eps): 
     return 1 + (eps0(omega)/eps)**p
+
+def make_c2c_problem(omega_target, eps_in, eps_out, centers_grid, omega_dense):
+    rhos_exact = numpy.array([rho_exact_cauchy(c, eps_in) for c in centers_grid])
+    rhos_plus = numpy.array([r * correction(w, eps_in) for r, w in zip(rhos_exact, centers_grid)])
+    rhos_minus = numpy.array([r / correction(w, eps_in) for r, w in zip(rhos_exact, centers_grid)])
+    data = BoundedData(grid=centers_grid, exact=rhos_exact, upper=rhos_plus, lower=rhos_minus)
+    return TransitionKernelProblem(
+        param_grid=centers_grid,
+        omega_grid=omega_dense,
+        data=data,
+        target_func=lambda w: cauchy(w, omega_target, eps_out),
+        basis_func=lambda w, a: cauchy(w, a, eps_in),
+    )
 
 def main():
 
@@ -63,22 +71,15 @@ def main():
     centers_grid = numpy.linspace(omega_target - 8.0, omega_target + 10.0, 300)
     omega_dense = numpy.linspace(omega_target - 20.0, omega_target + 20.0, 1000)
 
-    rhos_exact = numpy.array([rho_exact_cauchy(c, eps_in) for c in centers_grid])
-    rhos_plus = numpy.array([r * correction(w, eps_in) 
-                             for r, w in zip(rhos_exact, centers_grid)])
-    rhos_minus = numpy.array([r / correction(w, eps_in) 
-                              for r, w in zip(rhos_exact, centers_grid)])
-    rho_delta = (rhos_plus - rhos_minus) / 2.0
+    problem = make_c2c_problem(omega_target, eps_in, eps_out, centers_grid, omega_dense)
+    rk_transition = RegulatedRKTransition(problem)
 
     # --- Optimization step ---
-    G_mat = cauchy(omega_dense[:, None], centers_grid[None, :], eps_in)
-    C_vec = cauchy(omega_dense, omega_target, eps_out)
+    G_mat = rk_transition.basis_matrix
+    C_vec = rk_transition.target_vector
 
     # For other values of eps, for finer grids and other setups, 
     # it is better to use mpmath; here, numpy is found to suffice
-    GTG = G_mat.T @ G_mat
-    GTC = G_mat.T @ C_vec
-    I_mat = numpy.eye(len(centers_grid))
 
     # Array of regulator values to test
     alpha_regs = numpy.logspace(-2, 2, 1000)
@@ -88,32 +89,10 @@ def main():
     total_errors = numpy.zeros_like(alpha_regs)
 
     for i, alpha_reg in enumerate(alpha_regs):
-        # Solve (G^T G + alpha * I) w = G^T C
-        g = scipy.linalg.solve(GTG + alpha_reg * I_mat, GTC)
-        
-        # 1. Systematic Error (Bias)
-        K_rec = G_mat @ g
-        discrepancy = numpy.abs(C_vec - K_rec)
-        
-        # --- RIGOROUS OPTIMIZATION OVER w_b ---
-        # G_mat is already the matrix of envelopes: G_mat[j, i] = delta(omega_j, centers_grid[i])
-        # D_matrix[j, i] evaluates the discrepancy at omega_j divided by the envelope centered at centers_grid[i]
-        D_matrix = discrepancy[:, None] / G_mat
-        
-        # Supremum over omega (axis 0) for each possible envelope center w_b
-        supremum_certs = numpy.max(D_matrix, axis=0)
-        
-        # Multiply by the exact upper bounds at those specific centers
-        syst_errs_all_wb = supremum_certs * rhos_plus
-        
-        # The rigorous systematic error is the MINIMUM across all valid envelope centers
-        syst_errors[i] = numpy.min(syst_errs_all_wb)
-        
-        # 2. Statistical Error (Variance)
-        stat_errors[i] = numpy.sum(numpy.abs(g) * rho_delta)
-        
-        # Total Error
-        total_errors[i] = stat_errors[i] + syst_errors[i]
+        result = rk_transition.evaluate(alpha_reg)
+        syst_errors[i] = result.systematic_error
+        stat_errors[i] = result.statistical_error
+        total_errors[i] = result.total_error
 
     # Find the exact optimal point
     opt_idx = numpy.argmin(total_errors)
@@ -160,67 +139,25 @@ def main():
     print('[c2c_regulated] Plot 2: kernel reconstructions (RK vs SIP). This will take a few seconds...')
 
     # --- RK OPTIMIZATION (Optimized over alpha AND omega_b)
-    G_mat = cauchy(omega_dense[:, None], centers_grid[None, :], eps_in)
-    C_vec = cauchy(omega_dense, omega_target, eps_out)
-    GTG = G_mat.T @ G_mat
-    GTC = G_mat.T @ C_vec
-    I_mat = numpy.eye(len(centers_grid))
-
-    def compute_rk_width(log_alpha):
-        
-        w = scipy.linalg.solve(GTG + (10**log_alpha) * I_mat, GTC, assume_a='pos')
-        K_rec = G_mat @ w
-        discrepancy = numpy.abs(C_vec - K_rec)
-        D_matrix = discrepancy[:, None] / G_mat
-        supremum_certs = numpy.max(D_matrix, axis=0)
-        syst_errs = supremum_certs * rhos_plus
-        syst_err = numpy.min(syst_errs)
-        stat_err = numpy.sum(numpy.abs(w) * rho_delta)
-        return syst_err + stat_err
-
-    # --- Optimize regulator alpha
-    res = scipy.optimize.minimize_scalar(compute_rk_width, bounds=(-8, 1), method='bounded')
-    alpha_opt = 10**res.x
-    w_opt = scipy.linalg.solve(GTG + alpha_opt * I_mat, GTC, assume_a='pos')
-    K_rec_opt = G_mat @ w_opt
-
-    # Extract Optimal w_b envelope and RK bounds
-    discrepancy_opt = numpy.abs(C_vec - K_rec_opt)
-    D_matrix_opt = discrepancy_opt[:, None] / G_mat
-    supremum_certs_opt = numpy.max(D_matrix_opt, axis=0)
-    syst_errs_all_wb = supremum_certs_opt * rhos_plus
-
-    opt_wb_idx = numpy.argmin(syst_errs_all_wb)
-    opt_wb = centers_grid[opt_wb_idx]
-    opt_supremum = supremum_certs_opt[opt_wb_idx]
-    rk_syst_penalty = syst_errs_all_wb[opt_wb_idx]
+    _, rk_result = rk_transition.optimize_log_alpha(bounds=(-8, 1))
+    alpha_opt = rk_result.alpha
+    w_opt = rk_result.coefficients
+    K_rec_opt = rk_result.reconstruction
+    discrepancy_opt = rk_result.discrepancy
+    opt_wb_idx = rk_result.certificate_index
+    opt_supremum = rk_result.certificate
     bounding_envelope = G_mat[:, opt_wb_idx]
 
-    prod_lower = numpy.minimum(w_opt * rhos_minus, w_opt * rhos_plus)
-    prod_upper = numpy.maximum(w_opt * rhos_minus, w_opt * rhos_plus)
-    rk_upper = numpy.sum(prod_upper) + rk_syst_penalty
-    rk_lower = numpy.sum(prod_lower) - rk_syst_penalty
-
     # --- SIP reconstruction
-    target_f = lambda w: cauchy(w, omega_target, eps_out)
-    basis_f = lambda w, a: cauchy(w, a, eps_in)
-
-    rho_bar = (rhos_plus + rhos_minus) / 2.0
-    rho_delta = (rhos_plus - rhos_minus) / 2.0
-
-    lam_up, k_up, val_up, diff_up, Phi_d = solve_sip_exchange(
-        centers_grid, rho_bar, rho_delta, omega_dense, target_f, basis_f, 
-        bound_type='upper', scale=True, force_positivity=False
-    )
-    deltas_up = compute_sip_certificates(diff_up, Phi_d, 'upper')
-    sip_upper = numpy.min(val_up + deltas_up * rhos_plus)
-
-    lam_low, k_low, val_low, diff_low, _ = solve_sip_exchange(
-        centers_grid, rho_bar, rho_delta, omega_dense, target_f, basis_f, 
-        bound_type='lower', scale=True, force_positivity=False
-    )
-    deltas_low = compute_sip_certificates(diff_low, Phi_d, 'lower')
-    sip_lower = numpy.max(val_low - deltas_low * rhos_plus)
+    sip_interval = SIPTransition(
+        problem,
+        scale=True,
+        force_positivity=False,
+    ).solve_interval()
+    k_up = sip_interval.upper.kappa
+    k_low = sip_interval.lower.kappa
+    sip_upper = sip_interval.upper.rigorous
+    sip_lower = sip_interval.lower.rigorous
 
     fig, axs = plt.subplots(nrows=2, ncols=1,
                             sharex=True,
@@ -303,42 +240,21 @@ def main():
         cg = numpy.linspace(w_t - 8.0, w_t + 10.0, 200)
         od = numpy.linspace(w_t - 20.0, w_t + 20.0, 1000)
         
-        # Local Data
-        r_ex = numpy.array([rho_exact_cauchy(c, eps_in) for c in cg])
-        r_pl = r_ex * numpy.array([correction(c, eps_in) for c in cg])
-        r_mi = r_ex / numpy.array([correction(c, eps_in) for c in cg])
-        rb, rd = (r_pl + r_mi)/2.0, (r_pl - r_mi)/2.0
+        problem_i = make_c2c_problem(w_t, eps_in, eps_out, cg, od)
         
         # --- RK OPTIMIZATION ---
-        Gm = cauchy(od[:, None], cg[None, :], eps_in)
-        Cv = cauchy(od, w_t, eps_out)
-        GtG, GtC, Im = Gm.T @ Gm, Gm.T @ Cv, numpy.eye(len(cg))
-        
-        def rk_width_obj(la):
-            w = scipy.linalg.solve(GtG + (10**la)*Im, GtC, assume_a='pos')
-            # Optimized w_b envelope
-            sys = numpy.min(numpy.max(numpy.abs(Cv - Gm@w)[:, None] / Gm, axis=0) * r_pl)
-            stat = numpy.sum(numpy.abs(w) * rd)
-            return sys + stat
-        
-        res_a = scipy.optimize.minimize_scalar(rk_width_obj, bounds=(-8, 3), method='bounded')
-        alpha_opt = 10**res_a.x
-        wf = scipy.linalg.solve(GtG + alpha_opt*Im, GtC, assume_a='pos')
-        
-        # Final RK Bounds
-        rk_sys = numpy.min(numpy.max(numpy.abs(Cv - Gm@wf)[:, None] / Gm, axis=0) * r_pl)
-        rk_ups[i] = numpy.sum(numpy.maximum(wf*r_mi, wf*r_pl)) + rk_sys
-        rk_lows[i] = numpy.sum(numpy.minimum(wf*r_mi, wf*r_pl)) - rk_sys
+        _, rk_result_i = RegulatedRKTransition(problem_i).optimize_log_alpha(bounds=(-8, 3))
+        rk_ups[i] = rk_result_i.upper
+        rk_lows[i] = rk_result_i.lower
         
         # --- SIP BOUNDS ---
-        tf = lambda w: cauchy(w, w_t, eps_out)
-        bf = lambda w, a: cauchy(w, a, eps_in)
-        
-        _, _, vu, du, Pd = solve_sip_exchange(cg, rb, rd, od, tf, bf, bound_type='upper', scale=True, force_positivity=False)
-        _, _, vl, dl, _  = solve_sip_exchange(cg, rb, rd, od, tf, bf, bound_type='lower', scale=True, force_positivity=False)
-        
-        sip_ups[i] = numpy.min(vu + compute_sip_certificates(du, Pd, 'upper') * r_pl)
-        sip_lows[i] = numpy.max(vl - compute_sip_certificates(dl, Pd, 'lower') * r_pl)
+        sip_interval_i = SIPTransition(
+            problem_i,
+            scale=True,
+            force_positivity=False,
+        ).solve_interval()
+        sip_ups[i] = sip_interval_i.upper.rigorous
+        sip_lows[i] = sip_interval_i.lower.rigorous
 
     plt.figure(figsize=(10, 6))
 

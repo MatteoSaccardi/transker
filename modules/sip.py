@@ -1,6 +1,46 @@
+#################################################################################
+#
+# sip.py: semi-infinite-programming exchange solver and certificate utilities
+# Copyright (C) 2026 Matteo Saccardi
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+#
+#################################################################################
+
+"""Semi-infinite-programming exchange solver and certificate utilities."""
+
 import numpy
 import cvxpy as cp
 import scipy.optimize
+
+SUPPORTED_SOLVERS = (cp.CLARABEL, cp.ECOS, cp.SCS)
+
+
+def available_sip_solvers():
+    """
+    Return installed CVXPY solvers supported by this module.
+
+    Returns
+    -------
+    list
+        Supported solver names in preferred order. `CLARABEL` is preferred,
+        followed by `ECOS` and `SCS` when installed.
+    """
+    installed = set(cp.installed_solvers())
+    return [solver for solver in SUPPORTED_SOLVERS if solver in installed]
+
 
 def solve_sip_exchange(param_centers, rho_bar, rho_delta, omega_dense, 
                        target_func, basis_func, bound_type='upper', 
@@ -8,7 +48,7 @@ def solve_sip_exchange(param_centers, rho_bar, rho_delta, omega_dense,
                        use_local_search=True, tol=1e-7, max_iters=100,
                        scale=False, force_positivity=False,):
     """
-    A generalized Semi-Infinite Programming (SIP) exchange solver.
+    Solve one upper or lower SIP dual problem by exchange/cutting planes.
     
     Parameters
     ----------
@@ -43,6 +83,24 @@ def solve_sip_exchange(param_centers, rho_bar, rho_delta, omega_dense,
         If True, scales the problem to avoid numerical issues.
     force_positivity : bool
         If True, adds a positivity constraint to the coefficients of the problem.
+
+    Returns
+    -------
+    lam_opt : numpy.ndarray
+        Optimized coefficients on `param_centers`.
+    kappa_lambda_dense : numpy.ndarray
+        Reconstructed kernel sampled on `omega_dense`.
+    prob_val : float
+        Solver objective value before certificate correction.
+    diff_dense : numpy.ndarray
+        `target_func(omega_dense) - kappa_lambda_dense`.
+    Phi_dense : numpy.ndarray
+        Basis matrix sampled on `(omega_dense, param_centers)`.
+
+    Raises
+    ------
+    RuntimeError
+        If no supported CVXPY solver is installed.
     """
     N_params = len(param_centers)
     
@@ -76,6 +134,13 @@ def solve_sip_exchange(param_centers, rho_bar, rho_delta, omega_dense,
             obj_scale = 1.0
     else:
         obj_scale = 1.0
+
+    solvers_to_try = available_sip_solvers()
+    if not solvers_to_try:
+        supported = ", ".join(SUPPORTED_SOLVERS)
+        raise RuntimeError(
+            f"No supported CVXPY solver is installed. Install at least one of: {supported}."
+        )
 
     for iteration in range(max_iters):
         # 1. Build constraints on the ACTIVE grid
@@ -111,8 +176,6 @@ def solve_sip_exchange(param_centers, rho_bar, rho_delta, omega_dense,
             sign = -1.0
             
         prob = cp.Problem(obj, cons)
-        # Robust Solver Fallback Chain (CLARABEL -> ECOS -> SCS)
-        solvers_to_try = [cp.CLARABEL, cp.ECOS, cp.SCS]
         for solver in solvers_to_try:
             try:
                 prob.solve(solver=solver, verbose=False)
@@ -169,7 +232,21 @@ def solve_sip_exchange(param_centers, rho_bar, rho_delta, omega_dense,
 
 def compute_sip_certificates(diff_dense, Phi_dense, bound_type='upper'):
     """
-    Generalized certificate computation.
+    Compute pointwise certificate corrections for SIP residuals.
+
+    Parameters
+    ----------
+    diff_dense : numpy.ndarray
+        Difference between target and reconstructed kernel on the dense grid.
+    Phi_dense : numpy.ndarray
+        Basis matrix sampled on the same dense grid.
+    bound_type : {'upper', 'lower'}, optional
+        Direction of the certificate.
+
+    Returns
+    -------
+    numpy.ndarray
+        Certificate value for each basis/data parameter.
     """
     N_params = Phi_dense.shape[1]
     deltas = numpy.zeros(N_params)

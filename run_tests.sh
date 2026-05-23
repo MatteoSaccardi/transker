@@ -4,11 +4,15 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_DIR="${SCRIPT_DIR}/tests"
+PYTHON_BIN="${PYTHON:-python3}"
+if [[ "$PYTHON_BIN" == */* && "$PYTHON_BIN" != /* ]]; then
+    PYTHON_BIN="${SCRIPT_DIR}/${PYTHON_BIN}"
+fi
 
-TEST_KEYS=("c2c" "c2g" "levy" "sip")
-TEST_NAMES=("c2c" "c2g" "levy" "sip")
-TEST_FILES=("c2c_regulated_test.py" "c2g_test.py" "levy_test.py" "sip_test.py")
-TEST_ESTIMATES=("40 minutes" "7 minutes" "2 minutes" "10 minutes")
+TEST_KEYS=("smoke" "c2c" "c2g" "levy" "sip")
+TEST_NAMES=("smoke" "c2c" "c2g" "levy" "sip")
+TEST_FILES=("smoke_test.py" "c2c_regulated_test.py" "c2g_test.py" "levy_test.py" "sip_test.py")
+TEST_ESTIMATES=("2 seconds" "10m 39s" "7m 57s" "2m 03s" "29m 34s")
 
 format_seconds() {
     local total="$1"
@@ -26,11 +30,12 @@ format_seconds() {
 print_menu() {
     echo "Select tests to run by number, separated by spaces."
     echo
-    echo "  1) all              estimated: 1 hour"
-    echo "  2) c2c              estimated: ${TEST_ESTIMATES[0]}"
-    echo "  3) c2g              estimated: ${TEST_ESTIMATES[1]}"
-    echo "  4) levy             estimated: ${TEST_ESTIMATES[2]}"
-    echo "  5) sip              estimated: ${TEST_ESTIMATES[3]}"
+    echo "  1) all              estimated: 50m 15s"
+    echo "  2) smoke            estimated: ${TEST_ESTIMATES[0]}"
+    echo "  3) c2c              estimated: ${TEST_ESTIMATES[1]}"
+    echo "  4) c2g              estimated: ${TEST_ESTIMATES[2]}"
+    echo "  5) levy             estimated: ${TEST_ESTIMATES[3]}"
+    echo "  6) sip              estimated: ${TEST_ESTIMATES[4]}"
     echo
 }
 
@@ -55,20 +60,23 @@ parse_selection() {
     for choice in "$@"; do
         case "$choice" in
             1|all)
-                SELECTED_INDICES=(0 1 2 3)
+                SELECTED_INDICES=(0 1 2 3 4)
                 return 0
                 ;;
-            2|c2c)
+            2|smoke)
                 add_test_index 0
                 ;;
-            3|c2g)
+            3|c2c)
                 add_test_index 1
                 ;;
-            4|levy)
+            4|c2g)
                 add_test_index 2
                 ;;
-            5|sip)
+            5|levy)
                 add_test_index 3
+                ;;
+            6|sip)
+                add_test_index 4
                 ;;
             *)
                 echo "Unknown selection: ${choice}" >&2
@@ -99,7 +107,7 @@ run_test() {
     echo
     echo "[$name] Running ${file} from ${TEST_DIR}"
     start="$(date +%s)"
-    python3 "$file"
+    "$PYTHON_BIN" "$file"
     status="$?"
     end="$(date +%s)"
     elapsed=$((end - start))

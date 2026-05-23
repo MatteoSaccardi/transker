@@ -1,9 +1,6 @@
 import numpy
-import cvxpy as cp
-import scipy.optimize
 from tqdm.auto import tqdm
 import os
-import mpmath
 import shutil
 
 import random
@@ -17,32 +14,18 @@ plt.rc('font', family='serif')
 
 import sys
 sys.path.append("../")
-from modules.sip import solve_sip_exchange, compute_sip_certificates
+from modules.bounds import BoundedData
 from modules.g2c import CauchySmearing_x
+from modules.kernels import cauchy_np as cauchy
+from modules.kernels import gaussian_np as gaussian
+from modules.kernels import gaussian_to_cauchy_kernel_mp as K_cauchy
+from modules.kernels import gaussian_to_cauchy_kernel_x_mp as K_cauchy_x
+from modules.transition import SIPTransition, TransitionKernelProblem
 
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 plot_folder = '../paperplots/levy'
-
-# ==============================================================================
-# Kernel Definitions
-# ==============================================================================
-
-def cauchy(w, w1, eps):
-    return (eps / numpy.pi) / ((w - w1)**2 + eps**2)
-
-def gaussian(w, w1, sigma):
-    return 1 / numpy.sqrt(2 * numpy.pi * sigma**2) * numpy.exp(- (w - w1)**2 / (2 * sigma**2))
-
-def levy(x, mu, c):
-    return mpmath.sqrt(c/(2*mpmath.pi)) * mpmath.exp(-c/(2*(x-mu))) / mpmath.power(x-mu,mpmath.mpf('1.5'))
-
-def K_cauchy(sigma, eps):
-    return 2 * sigma * levy(sigma**2, 0, eps**2)
-
-def K_cauchy_x(x):
-    return 2 * x * levy(x**2, 0, 1)
 
 # ==============================================================================
 # Model Spectral Density
@@ -64,6 +47,21 @@ sigma_plus = lambda sigma: 0.55
 sigma_minus = lambda sigma: 0.6 
 correction_plus = lambda sigma: (sigma_plus(sigma)/sigma)**2
 correction_minus = lambda sigma: (sigma_minus(sigma)/sigma)**2
+
+def make_levy_bounded_data(omega_t, sigmas_grid):
+    rhos = numpy.array([rho_sigma_exact(omega_t, s) for s in sigmas_grid])
+    rhos_plus = numpy.array([r + correction_plus(s) for r, s in zip(rhos, sigmas_grid)])
+    rhos_minus = numpy.array([r / (1 + correction_minus(s)) for r, s in zip(rhos, sigmas_grid)])
+    return BoundedData(grid=sigmas_grid, exact=rhos, upper=rhos_plus, lower=rhos_minus)
+
+def make_levy_sip_problem(omega_t, data, omega_dense):
+    return TransitionKernelProblem(
+        param_grid=data.grid,
+        omega_grid=omega_dense,
+        data=data,
+        target_func=lambda w: cauchy(w, omega_t, epsilon_target),
+        basis_func=lambda w, sigma: gaussian(w, omega_t, sigma),
+    )
 
 def main():
 
@@ -298,44 +296,26 @@ def main():
         # --- A. Exact Data & Synthetic Bounds ---
         exacts[i] = rho_cauchy_exact(omega_t, epsilon_target)
         
-        rhos = numpy.array([rho_sigma_exact(omega_t, s) for s in sigmas_grid])
-        rhos_plus = numpy.array([r + correction_plus(s) for r, s in zip(rhos, sigmas_grid)])
-        rhos_minus = numpy.array([r / (1 + correction_minus(s)) for r, s in zip(rhos, sigmas_grid)])
+        data = make_levy_bounded_data(omega_t, sigmas_grid)
         
         # --- B. RK Bounds (via external modules/g2c.py, CauchySmearing_x) ---
         # Because Levy K > 0 everywhere, mpmath isn't strictly necessary and faster; we still use it, but it is also ok to set use_mp=False
-        cs = CauchySmearing_x(xs_grid, rhos, rhos_plus, rhos_minus, use_mp=True)
+        cs = CauchySmearing_x(xs_grid, data.exact, data.upper, data.lower, use_mp=True)
         _, rk_up, rk_low = cs.rho_cauchy()
         
         rk_uppers[i] = rk_up
         rk_lowers[i] = rk_low
         
-        # --- C. SIP Bounds (via external modules/sip.py) ---
-        rho_bar = (rhos_plus + rhos_minus) / 2.0
-        rho_delta = (rhos_plus - rhos_minus) / 2.0
-        
-        target_func = lambda w: cauchy(w, omega_t, epsilon_target)
-        basis_func = lambda w, sigma: gaussian(w, omega_t, sigma)
-        
         omega_dense = numpy.linspace(omega_t - 15.0, omega_t + 15.0, 500)
-        
-        # Upper Bound
-        _, _, val_up, diff_up, Phi_d = solve_sip_exchange(
-            sigmas_grid, rho_bar, rho_delta, omega_dense, target_func, basis_func, 
-            bound_type='upper', omega_active_init=[omega_t], use_local_search=True,
+        sip_problem = make_levy_sip_problem(omega_t, data, omega_dense)
+        sip_interval = SIPTransition(
+            sip_problem,
+            omega_active_init=[omega_t],
+            use_local_search=True,
             scale=True, force_positivity=True
-        )
-        deltas_up = compute_sip_certificates(diff_up, Phi_d, 'upper')
-        sip_uppers[i] = numpy.min(val_up + deltas_up * rhos_plus)
-        
-        # Lower Bound
-        _, _, val_low, diff_low, _ = solve_sip_exchange(
-            sigmas_grid, rho_bar, rho_delta, omega_dense, target_func, basis_func, 
-            bound_type='lower', omega_active_init=[omega_t], use_local_search=True,
-            scale=True, force_positivity=True
-        )
-        deltas_low = compute_sip_certificates(diff_low, Phi_d, 'lower')
-        sip_lowers[i] = numpy.max(val_low - deltas_low * rhos_plus)
+        ).solve_interval()
+        sip_uppers[i] = sip_interval.upper.rigorous
+        sip_lowers[i] = sip_interval.lower.rigorous
 
     fig, ax1 = plt.subplots(1, 1, figsize=(10, 6))
 

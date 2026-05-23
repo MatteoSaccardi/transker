@@ -1,13 +1,45 @@
-import mpmath
+#################################################################################
+#
+# g2c.py: Gaussian-to-Cauchy (Levy) RK transition utilities
+# Copyright (C) 2026 Matteo Saccardi
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+#
+#################################################################################
+
+"""Gaussian-to-Cauchy (Levy) RK transition classes based on Levy kernels."""
+
 import numpy
 
-def levy_np(x, mu, c):
-    return numpy.sqrt(c/(2*numpy.pi)) * numpy.exp(-c/(2*(x-mu))) / (x-mu)**1.5
-
-def levy_mp(x, mu, c):
-    return mpmath.sqrt(c/(2*mpmath.pi)) * mpmath.exp(-c/(2*(x-mu))) / mpmath.power(x-mu,mpmath.mpf('1.5'))
+from modules.kernels import levy_mp, levy_np
 
 class CauchySmearing:
+    """
+    Propagate bounded Gaussian-width data to a target Cauchy width (Levy).
+
+    Parameters
+    ----------
+    sigmas : array_like
+        Gaussian widths at which the input data are sampled.
+    rho_sigmas : array_like
+        Central Gaussian-smeared data values.
+    uppers, lowers : array_like
+        Pointwise upper and lower admissible data values.
+    use_mp : bool, optional
+        If True, evaluate the Levy kernel with mpmath scalar arithmetic.
+    """
 
     def __init__(self, sigmas, rho_sigmas, uppers, lowers, use_mp=True):
         self.sigmas = sigmas
@@ -21,24 +53,29 @@ class CauchySmearing:
         return self.rho_cauchy(epsilon)
     
     def levy(self, x, mu, c):
+        """Evaluate the Levy distribution with the configured backend."""
         if self.use_mp:
             return levy_mp(x,mu,c)
         return levy_np(x,mu,c)
     
     def K_cauchy(self, sigma, epsilon):
+        """Evaluate the Gaussian-to-Cauchy transition kernel."""
         return 2 * sigma * self.levy(sigma**2, 0, epsilon**2)
         
     def rho_cauchy(self, epsilon):
-        r'''
-        Compute 
-            \int_0^\infty d\omega \rho(\omega) \delta^c_\epsilon(\omega,E)
-        where \delta^c is a Cauchy smearing function, from
-            \int_0^\infty d\sigma K(\epsilon, \sigma) \rho^g_\sigma(E)
-        where \rho^g_\sigma is a spectral function smeared with a Gaussian 
-        kernel \delta^g centered around E and with width \sigma,
-        while K is the kernel defined in K_cauchy
-        NOTE: E does not enter the definition of K_cauchy
-        '''
+        """
+        Propagate bounded Gaussian-width data to Cauchy width `epsilon`.
+
+        Parameters
+        ----------
+        epsilon : float
+            Target Cauchy width.
+
+        Returns
+        -------
+        tuple
+            `(central, upper, lower)` propagated by trapezoidal integration.
+        """
         if self.epsilon != epsilon:
             self.epsilon = epsilon
             Kvals = [ self.K_cauchy(sigma, epsilon) for sigma in self.sigmas ]
@@ -61,6 +98,20 @@ class CauchySmearing:
 
     
 class CauchySmearing_x:
+    """
+    Dimensionless Gaussian-to-Cauchy transition on `x = sigma / epsilon`.
+
+    Parameters
+    ----------
+    xs : array_like
+        Dimensionless width grid.
+    rho_sigmas : array_like
+        Central Gaussian-smeared data values evaluated at `sigma = epsilon*x`.
+    uppers, lowers : array_like
+        Pointwise upper and lower admissible data values on `xs`.
+    use_mp : bool, optional
+        If True, evaluate the Levy kernel with mpmath scalar arithmetic.
+    """
 
     def __init__(self, xs, rho_sigmas, uppers, lowers, use_mp=True):
         self.xs = xs
@@ -74,24 +125,24 @@ class CauchySmearing_x:
         return self.rho_cauchy()
     
     def levy(self, x, mu, c):
+        """Evaluate the Levy distribution with the configured backend."""
         if self.use_mp:
             return levy_mp(x,mu,c)
         return levy_np(x,mu,c)
     
     def K_cauchy_x(self, x):
+        """Evaluate the dimensionless Gaussian-to-Cauchy transition kernel."""
         return 2 * x * self.levy(x**2, 0, 1)
         
     def rho_cauchy(self):
-        r'''
-        Compute 
-            \int_0^\infty d\omega \rho(\omega) \delta^c_\epsilon(\omega,E)
-        where \delta^c is a Cauchy smearing function, from
-            \int_0^\infty dx K(x) \rho^g_{\epsilon x}(E)
-        where \rho^g_\sigma is a spectral function smeared with a Gaussian 
-        kernel \delta^g centered around E and with width \epsilon x,
-        while K is the kernel defined in K_cauchy_x
-        NOTE: E and \epsilon do not enter the definition of K_cauchy_x
-        '''
+        """
+        Propagate bounded data through the dimensionless Levy kernel.
+
+        Returns
+        -------
+        tuple
+            `(central, upper, lower)` propagated by trapezoidal integration.
+        """
         Kvals = self.Kvals
         integrand = [ Kval * self.rho_sigmas[i] for i, Kval in enumerate(Kvals) ]
         integral = numpy.trapezoid(integrand, self.xs)

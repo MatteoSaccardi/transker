@@ -1,8 +1,52 @@
-import mpmath
+#################################################################################
+#
+# c2g.py: Cauchy-to-Gaussian RK transition utilities
+# Copyright (C) 2026 Matteo Saccardi
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+#
+#################################################################################
+
+"""Cauchy-to-Gaussian RK transition class."""
+
 import numpy
-import scipy
+
+from modules.kernels import cauchy_to_gaussian_kernel_mp, cauchy_to_gaussian_kernel_np
 
 class c2g:
+    """
+    Apply the analytic Cauchy-to-Gaussian transition kernel to bounded data.
+
+    Parameters
+    ----------
+    ws : array_like
+        Grid of Cauchy centers.
+    rho_epsilons : array_like
+        Central Cauchy-smeared data values on `ws`.
+    uppers, lowers : array_like
+        Pointwise upper and lower admissible data values.
+    epsilon : float
+        Width of the input Cauchy smearing.
+    use_mp : bool, optional
+        If True, evaluate the transition kernel with mpmath scalar arithmetic.
+
+    Methods
+    -------
+    rho_gauss(E, sigma)
+        Return central, upper, and lower propagated Gaussian-smeared values.
+    """
 
     def __init__(self, ws, rho_epsilons, uppers, lowers, epsilon, use_mp=True):
         self.ws = ws
@@ -18,24 +62,38 @@ class c2g:
         return self.rho_gauss(E, sigma)
     
     def K_gauss(self, w, E, sigma):
+        """
+        Evaluate the Cauchy-to-Gaussian transition kernel.
+
+        Parameters
+        ----------
+        w : float
+            Input Cauchy center.
+        E : float
+            Target Gaussian center.
+        sigma : float
+            Target Gaussian width.
+        """
         if self.use_mp:
-            z = ( self.epsilon - 1j * (w-E) ) / mpmath.sqrt(2*sigma**2)
-            return 1 / mpmath.sqrt(2*mpmath.pi*sigma**2) * ( mpmath.exp(z**2) * (1+mpmath.erf(z)) ).real
-        else:
-            z = ( self.epsilon - 1j * (w-E) ) / numpy.sqrt(2*sigma**2)
-            return 1 / numpy.sqrt(2*numpy.pi*sigma**2) * ( numpy.exp(z**2) * (1+scipy.special.erf(z)) ).real
+            return cauchy_to_gaussian_kernel_mp(w, E, self.epsilon, sigma)
+        return cauchy_to_gaussian_kernel_np(w, E, self.epsilon, sigma)
         
     def rho_gauss(self, E, sigma):
-        r'''
-        Compute the spectral function smeared with a gaussian kernel of width sigma and center E
-            \int_0^\infty d\omega \rho(\omega) \delta^g_\sigma(\omega,E)
-        from a spectral function smeared with a Cauchy kernel of width self.epsilon,
-            \int_0^\infty d\omega \rho(\omega) \delta^c_\epsilon(\omega,\omega')
-        from the transition kernel K defined in self.K_gauss as
-            Re[ exp(z^2) * (1+erf(z)) ] / sqrt(2*pi*sigma^2) 
-        for 
-            z = (epsilon-i(w-E))/sqrt(2*sigma^2)
-        '''
+        """
+        Propagate bounded Cauchy-smeared data to a Gaussian target.
+
+        Parameters
+        ----------
+        E : float
+            Target Gaussian center.
+        sigma : float
+            Target Gaussian width.
+
+        Returns
+        -------
+        tuple
+            `(central, upper, lower)` propagated by trapezoidal integration.
+        """
         if self.E != E or self.sigma != sigma:
             self.E = E
             self.sigma = sigma
