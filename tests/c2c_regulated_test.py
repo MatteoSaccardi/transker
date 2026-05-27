@@ -103,11 +103,11 @@ def main():
     fig, ax = plt.subplots(figsize=(10, 6))
 
     ax.plot(alpha_regs, syst_errors, 'C0-', lw=3, 
-            label=r'$\delta \cdot \rho_{\varepsilon_1+}^{\mathtt c}$')
+            label=r'$\Delta_{\mathrm{prop}}(\xi)$')
     ax.plot(alpha_regs, stat_errors, 'C1--', lw=3, 
-            label=r'$\Delta[K\rho_{\varepsilon_1}^{\mathtt c}]$')
+            label=r'$\Delta_{\mathrm{sys}}(\xi)$')
     ax.plot(alpha_regs, total_errors, 'k-', lw=3, 
-            label=r'Total Error')
+            label=r'$\Delta_{\mathrm{tot}}(\xi)$')
 
     plt.plot(alpha_opt, error_opt, marker='*', markersize=18, color='k', zorder=5)
     plt.annotate(r'$\xi^\star$', xy=(alpha_opt, error_opt), xytext=(5, 10), 
@@ -139,7 +139,8 @@ def main():
     print('[c2c_regulated] Plot 2: kernel reconstructions (RK vs SIP). This will take a few seconds...')
 
     # --- RK OPTIMIZATION (Optimized over alpha AND omega_b)
-    _, rk_result = rk_transition.optimize_log_alpha(bounds=(-8, 1))
+    _, rk_interval = rk_transition.optimize_log_alpha(bounds=(-8, 1), RK_method="symmetric")
+    rk_result = rk_interval.upper
     alpha_opt = rk_result.alpha
     w_opt = rk_result.coefficients
     K_rec_opt = rk_result.reconstruction
@@ -218,7 +219,7 @@ def main():
     # PLOT 3: energy scan (RK vs SIP)
     # ------------------------------------------------------------------------------
 
-    print('[c2c_regulated] Plot 3: energy scan (RK vs SIP). This will take 8 minutes...')
+    print('[c2c_regulated] Plot 3: energy scan (RK vs SIP). This will take about 10 minutes...')
 
     eps_in  = 2.0  # Input Smearing
     eps_out = 1.0  # Target Smearing (Sharpening)
@@ -243,9 +244,9 @@ def main():
         problem_i = make_c2c_problem(w_t, eps_in, eps_out, cg, od)
         
         # --- RK OPTIMIZATION ---
-        _, rk_result_i = RegulatedRKTransition(problem_i).optimize_log_alpha(bounds=(-8, 3))
-        rk_ups[i] = rk_result_i.upper
-        rk_lows[i] = rk_result_i.lower
+        _, rk_interval_i = RegulatedRKTransition(problem_i).optimize_log_alpha(bounds=(-8, 3))
+        rk_ups[i] = rk_interval_i.upper_bound
+        rk_lows[i] = rk_interval_i.lower_bound
         
         # --- SIP BOUNDS ---
         sip_interval_i = SIPTransition(

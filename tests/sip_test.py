@@ -161,7 +161,7 @@ def main():
     # PLOT 1: SIP vs RK Stability Analysis
     # ------------------------------------------------------------------------------
 
-    print('[sip] Plot 1: Cauchy to Gaussian stability analysis. This will take 6 minutes...')
+    print('[sip] Plot 1: Cauchy to Gaussian stability analysis. This will take about 5 minutes...')
 
     eps_fixed = 2.0
     sigma_target = 1.0
@@ -263,7 +263,7 @@ def main():
     # PLOT 2: SIP vs RK Stability Analysis
     # ------------------------------------------------------------------------------
 
-    print('[sip] Plot 2: Cauchy to Gaussian optimized reconstructions. This will take 40 minutes...')
+    print('[sip] Plot 2: Cauchy to Gaussian optimized reconstructions. This will take about 27 minutes...')
 
     sigma_target = 1.0
     N_scan_global = 30

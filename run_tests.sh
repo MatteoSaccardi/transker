@@ -12,7 +12,7 @@ fi
 TEST_KEYS=("smoke" "c2c" "c2g" "levy" "sip")
 TEST_NAMES=("smoke" "c2c" "c2g" "levy" "sip")
 TEST_FILES=("smoke_test.py" "c2c_regulated_test.py" "c2g_test.py" "levy_test.py" "sip_test.py")
-TEST_ESTIMATES=("2 seconds" "10m 39s" "7m 57s" "2m 03s" "29m 34s")
+TEST_ESTIMATES=("4 seconds" "10m 40s" "6m 50s" "2m 04s" "31m 54s")
 
 format_seconds() {
     local total="$1"
@@ -30,7 +30,7 @@ format_seconds() {
 print_menu() {
     echo "Select tests to run by number, separated by spaces."
     echo
-    echo "  1) all              estimated: 50m 15s"
+    echo "  1) all              estimated: 51m 32s"
     echo "  2) smoke            estimated: ${TEST_ESTIMATES[0]}"
     echo "  3) c2c              estimated: ${TEST_ESTIMATES[1]}"
     echo "  4) c2g              estimated: ${TEST_ESTIMATES[2]}"

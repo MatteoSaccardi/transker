@@ -329,6 +329,44 @@ class RegulatedRKResult:
         return self.certificates[self.certificate_index]
 
 
+@dataclass
+class RegulatedRKIntervalResult:
+    """
+    Upper and lower regulated RK bounds after optimizing the ridge regulator.
+
+    Attributes
+    ----------
+    RK_method : {'asymmetric', 'symmetric'}
+        Optimization strategy. `asymmetric` optimizes the upper and lower
+        bounds separately; `symmetric` uses one regulator optimized by total
+        error for both bounds.
+    upper, lower : RegulatedRKResult
+        Regulated results used for the final upper and lower bounds.
+
+    Useful Properties
+    -----------------
+    upper_bound, lower_bound : float
+        Final propagated bounds.
+    width : float
+        Difference `upper_bound - lower_bound`.
+    """
+    RK_method: str
+    upper: RegulatedRKResult
+    lower: RegulatedRKResult
+
+    @property
+    def upper_bound(self):
+        return self.upper.upper
+
+    @property
+    def lower_bound(self):
+        return self.lower.lower
+
+    @property
+    def width(self):
+        return self.upper_bound - self.lower_bound
+
+
 class RegulatedRKTransition:
     """
     Solver for regulated RK/ridge transition reconstructions.
@@ -349,8 +387,8 @@ class RegulatedRKTransition:
         Solve the ridge normal equations for a fixed regulator.
     evaluate(alpha)
         Compute reconstruction, certificates, errors, and bounds at `alpha`.
-    optimize_log_alpha(bounds=(-8, 1), method='bounded')
-        Minimize total error over `log10(alpha)`.
+    optimize_log_alpha(bounds=(-8, 1), RK_method='asymmetric', scipy_method='bounded')
+        Optimize upper/lower bounds over `log10(alpha)`.
     """
     def __init__(self, problem, assume_a="pos"):
         self.problem = problem
@@ -455,7 +493,36 @@ class RegulatedRKTransition:
             lower=lower,
         )
 
-    def optimize_log_alpha(self, bounds=(-8, 1), method="bounded"):
+    def _optimize_log_objective(self, objective, bounds, grid_size, scipy_method):
+        lo, hi = bounds
+        grid = numpy.linspace(lo, hi, grid_size)
+        values = numpy.array([objective(x) for x in grid])
+        best = int(numpy.argmin(values))
+
+        left = grid[max(0, best - 1)]
+        right = grid[min(len(grid) - 1, best + 1)]
+
+        if left == right:
+            return scipy.optimize.OptimizeResult(
+                x=grid[best],
+                fun=values[best],
+                success=True,
+                message="Minimum found at the edge of the log-alpha grid.",
+            )
+
+        return scipy.optimize.minimize_scalar(
+            objective,
+            bounds=(left, right),
+            method=scipy_method,
+        )
+
+    def optimize_log_alpha(
+        self,
+        bounds=(-8, 1),
+        RK_method="asymmetric",
+        scipy_method="bounded",
+        grid_size=200,
+    ):
         """
         Optimize the regulator over a log10 interval.
 
@@ -463,17 +530,63 @@ class RegulatedRKTransition:
         ----------
         bounds : tuple, optional
             Search interval for `log10(alpha)`.
-        method : str, optional
+        RK_method : {'asymmetric', 'symmetric'}, optional
+            Regulated-bound optimization strategy. `asymmetric` optimizes the
+            upper and lower propagated bounds separately. `symmetric` uses one
+            regulator optimized by total error for both bounds.
+        scipy_method : str, optional
             Method passed to `scipy.optimize.minimize_scalar`.
+        grid_size : int, optional
+            Number of log-alpha grid points used to identify the local basin
+            before calling the scalar minimizer.
 
         Returns
         -------
         tuple
-            `(scipy_result, regulated_result)` where `regulated_result` is the
-            `RegulatedRKResult` at the optimized `alpha`.
+            `(scipy_result, interval_result)` for `RK_method='symmetric'`, or
+            `((upper_scipy_result, lower_scipy_result), interval_result)` for
+            `RK_method='asymmetric'`.
         """
-        def objective(log_alpha):
-            return self.evaluate(10**log_alpha).total_error
+        if RK_method == "symmetric":
+            def objective(log_alpha):
+                return self.evaluate(10**log_alpha).total_error
 
-        res = scipy.optimize.minimize_scalar(objective, bounds=bounds, method=method)
-        return res, self.evaluate(10**res.x)
+            res = self._optimize_log_objective(
+                objective=objective,
+                bounds=bounds,
+                grid_size=grid_size,
+                scipy_method=scipy_method,
+            )
+            result = self.evaluate(10**res.x)
+            return res, RegulatedRKIntervalResult(
+                RK_method=RK_method,
+                upper=result,
+                lower=result,
+            )
+
+        if RK_method == "asymmetric":
+            def upper_objective(log_alpha):
+                return self.evaluate(10**log_alpha).upper
+
+            def lower_objective(log_alpha):
+                return -self.evaluate(10**log_alpha).lower
+
+            upper_res = self._optimize_log_objective(
+                objective=upper_objective,
+                bounds=bounds,
+                grid_size=grid_size,
+                scipy_method=scipy_method,
+            )
+            lower_res = self._optimize_log_objective(
+                objective=lower_objective,
+                bounds=bounds,
+                grid_size=grid_size,
+                scipy_method=scipy_method,
+            )
+            return (upper_res, lower_res), RegulatedRKIntervalResult(
+                RK_method=RK_method,
+                upper=self.evaluate(10**upper_res.x),
+                lower=self.evaluate(10**lower_res.x),
+            )
+
+        raise ValueError("RK_method must be 'asymmetric' or 'symmetric'")

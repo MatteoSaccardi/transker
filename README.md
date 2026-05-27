@@ -144,12 +144,12 @@ total at the end. On a MacBook Air M2 with 16GB memory, representative timings
 are:
 
 ```text
-smoke: 0m 02s
-c2c:   10m 39s
-c2g:   7m 57s
-levy:  2m 03s
-sip:   29m 34s
-total: 50m 15s
+smoke: 0m 04s
+c2c:   10m 40s
+c2g:   6m 50s
+levy:  2m 04s
+sip:   31m 54s
+total: 51m 32s
 ```
 
 `run_tests.sh` uses `python3` by default. If you want to force a specific
@@ -200,9 +200,13 @@ For regulated RK-style reconstructions, use:
 ```python
 from modules.transition import RegulatedRKTransition
 
-_, result = RegulatedRKTransition(problem).optimize_log_alpha(bounds=(-8, 1))
-print(result.lower, result.upper)
+_, interval = RegulatedRKTransition(problem).optimize_log_alpha(bounds=(-8, 1))
+print(interval.lower_bound, interval.upper_bound)
 ```
+
+By default, regulated RK bounds use `RK_method="asymmetric"`, which optimizes
+the upper and lower bounds separately. Use `RK_method="symmetric"` to use one
+regulator optimized by total error for both bounds.
 
 ## Running A Single Script Manually
 

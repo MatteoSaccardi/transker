@@ -70,6 +70,14 @@ class TransitionSmokeTests(unittest.TestCase):
         self.assertGreaterEqual(result.upper, result.lower)
         self.assertEqual(result.reconstruction.shape, (21,))
 
+    def test_regulated_rk_asymmetric_optimization_is_ordered(self):
+        _, interval = RegulatedRKTransition(self.make_problem()).optimize_log_alpha(
+            bounds=(-4, -1),
+            grid_size=10,
+        )
+        self.assertEqual(interval.RK_method, "asymmetric")
+        self.assertGreaterEqual(interval.upper_bound, interval.lower_bound)
+
     def test_sip_transition_tiny_problem(self):
         if not available_sip_solvers():
             self.skipTest("No supported CVXPY solver is installed")
