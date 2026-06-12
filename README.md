@@ -14,6 +14,7 @@ The main workflows currently cover:
 - Gaussian-to-Cauchy from Levy kernels (`modules/g2c.py`)
 - Generic bounded transition-kernel problems (`modules/transition.py`)
 - Semi-infinite-programming solvers and certificates (`modules/sip.py`)
+- Finite-window inverse-Laplace SIP bounds for noisy correlator data (`modules/ilt.py`)
 - Environment checks, smoke tests, and long plot-generation scripts
 
 ## Quick Start Checklist
@@ -39,6 +40,7 @@ modules/
   c2g.py                  Cauchy-to-Gaussian transition kernel utilities
   g2c.py                  Gaussian-to-Cauchy Levy kernel utilities
   sip.py                  SIP exchange solver and certificate computation
+  ilt.py                  inverse-Laplace SIP bounds for covariance-constrained correlator data
 
 tests/
   smoke_test.py           fast import/API/solver smoke tests
@@ -46,6 +48,7 @@ tests/
   levy_test.py            Levy Gaussian-to-Cauchy plots
   sip_test.py             SIP stability and reconstruction plots for Cauchy-to-Gaussian transitions
   c2c_regulated_test.py   regulated Cauchy-to-Cauchy plots
+  ilt_sip_plot.py         finite-window inverse-Laplace SIP plot for Gaussian/Cauchy smearings
 
 check_install.py          environment and solver diagnostic
 paperplots_original/      reference plots kept for comparison
@@ -115,6 +118,7 @@ It presents a numbered menu:
 4) c2g
 5) levy
 6) sip
+7) ilt-sip-plot
 ```
 
 Paste one or more numbers separated by spaces, for example:
@@ -130,6 +134,7 @@ You can also run non-interactively:
 ./run_tests.sh smoke
 ./run_tests.sh c2g sip
 ./run_tests.sh 4 6
+./run_tests.sh ilt
 ```
 
 The runner changes into `tests/` before executing the Python files. This matters
@@ -149,7 +154,8 @@ c2c:   10m 40s
 c2g:   6m 50s
 levy:  2m 04s
 sip:   31m 54s
-total: 51m 32s
+ilt-sip-plot: 1m 38s
+total: 53m 10s
 ```
 
 `run_tests.sh` uses `python3` by default. If you want to force a specific
@@ -218,6 +224,7 @@ python3 c2g_test.py
 python3 levy_test.py
 python3 sip_test.py
 python3 c2c_regulated_test.py
+python3 ilt_sip_plot.py
 ```
 
 Running these files from the repository root is not guaranteed to work because of their relative

@@ -9,10 +9,10 @@ if [[ "$PYTHON_BIN" == */* && "$PYTHON_BIN" != /* ]]; then
     PYTHON_BIN="${SCRIPT_DIR}/${PYTHON_BIN}"
 fi
 
-TEST_KEYS=("smoke" "c2c" "c2g" "levy" "sip")
-TEST_NAMES=("smoke" "c2c" "c2g" "levy" "sip")
-TEST_FILES=("smoke_test.py" "c2c_regulated_test.py" "c2g_test.py" "levy_test.py" "sip_test.py")
-TEST_ESTIMATES=("4 seconds" "10m 40s" "6m 50s" "2m 04s" "31m 54s")
+TEST_KEYS=("smoke" "c2c" "c2g" "levy" "sip" "ilt-sip-plot")
+TEST_NAMES=("smoke" "c2c" "c2g" "levy" "sip" "ilt-sip-plot")
+TEST_FILES=("smoke_test.py" "c2c_regulated_test.py" "c2g_test.py" "levy_test.py" "sip_test.py" "ilt_sip_plot.py")
+TEST_ESTIMATES=("4 seconds" "10m 40s" "6m 50s" "2m 04s" "31m 54s" "1m 38s")
 
 format_seconds() {
     local total="$1"
@@ -30,12 +30,13 @@ format_seconds() {
 print_menu() {
     echo "Select tests to run by number, separated by spaces."
     echo
-    echo "  1) all              estimated: 51m 32s"
+    echo "  1) all              estimated: 53m 10s"
     echo "  2) smoke            estimated: ${TEST_ESTIMATES[0]}"
     echo "  3) c2c              estimated: ${TEST_ESTIMATES[1]}"
     echo "  4) c2g              estimated: ${TEST_ESTIMATES[2]}"
     echo "  5) levy             estimated: ${TEST_ESTIMATES[3]}"
     echo "  6) sip              estimated: ${TEST_ESTIMATES[4]}"
+    echo "  7) ilt-sip-plot     estimated: ${TEST_ESTIMATES[5]}"
     echo
 }
 
@@ -60,7 +61,7 @@ parse_selection() {
     for choice in "$@"; do
         case "$choice" in
             1|all)
-                SELECTED_INDICES=(0 1 2 3 4)
+                SELECTED_INDICES=(0 1 2 3 4 5)
                 return 0
                 ;;
             2|smoke)
@@ -77,6 +78,9 @@ parse_selection() {
                 ;;
             6|sip)
                 add_test_index 4
+                ;;
+            7|ilt-sip-plot|ilt_sip_plot|ilt)
+                add_test_index 5
                 ;;
             *)
                 echo "Unknown selection: ${choice}" >&2
