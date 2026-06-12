@@ -27,7 +27,7 @@ def make_mock_data():
     gamma = 1.0 / gamma_inv
     s_floor = 0.05
     base_rel_err = 0.01
-    noise_growth_rate = 0.20
+    noise_growth_rate = 0.10
     random_seed = 42
 
     k = numpy.arange(n_state)
