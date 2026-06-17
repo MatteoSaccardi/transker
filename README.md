@@ -154,8 +154,8 @@ c2c:   10m 40s
 c2g:   6m 50s
 levy:  2m 04s
 sip:   31m 54s
-ilt-sip-plot: 1m 38s
-total: 53m 10s
+ilt-sip-plot: 4m 12s
+total: 55m 34s
 ```
 
 `run_tests.sh` uses `python3` by default. If you want to force a specific

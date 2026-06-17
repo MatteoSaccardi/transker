@@ -20,28 +20,26 @@ PLOT_FOLDER = "../paperplots/ilt_sip"
 
 def make_mock_data():
     nt = 16
-    energy_threshold = 0.10
-    energy_spacing = 0.02
+    energy_threshold = 2 * 0.135
+    energy_spacing = 0.020
     n_state = 100
     gamma_inv = 1.3
     gamma = 1.0 / gamma_inv
-    s_floor = 0.05
-    base_rel_err = 0.01
-    noise_growth_rate = 0.10
+    s_floor = 0.5
+    base_rel_err = 0.005
+    noise_growth_rate = energy_threshold
     random_seed = 42
 
     k = numpy.arange(n_state)
     energies = energy_threshold + energy_spacing * (k + 1)
     z = numpy.zeros(n_state)
     for n in range(n_state):
-        if n == 0:
+        if n % 2 == 0:
             z[n] = 1.0 / 5.0
-        elif n % 2 == 1:
-            z[n] = 1.0
         else:
-            z[n] = -1.0 / 5.0
+            z[n] = 1.0
     weights = z**2
-    weights *= cauchy_np(energies, 1.15, 0.15)
+    weights *= cauchy_np(energies, 0.770, 0.075)
 
     t_values = numpy.arange(1, nt + 1, dtype=float)
     c_true = correlator_from_peaks(t_values, energies, weights)
@@ -124,7 +122,11 @@ def solve_kernel_case(data, kind, center, width, cutoff, settings):
         violation_tol=settings["violation_tol"],
     )
     workflow.solve_bounds()
-    workflow.optimize_t0_bounds(include_t0_zero=False)
+    workflow.optimize_t0_bounds(
+        include_t0_zero=False,
+        correction_n_check=settings["correction_n_check"],
+        margin_n_check=settings["margin_n_check"],
+    )
     return {
         "center": float(center),
         "exact_full": exact_smeared_observable(data, kind, center, width, cutoff=None),
@@ -162,13 +164,7 @@ def make_final_plot(gaussian_scan, cauchy_scan, width, output_path):
     plt.rc("text", usetex=shutil.which("latex") is not None)
     plt.rc("font", family="serif")
 
-    fig, axes = plt.subplots(
-        2,
-        1,
-        figsize=(10, 6),
-        sharex=True,
-        gridspec_kw={"height_ratios": [3, 1], "hspace": 0.0},
-    )
+    fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True, gridspec_kw={"height_ratios": [3, 1], "hspace": 0.0})
 
     ax = axes[0]
     for scan, color, label, label_sip in (
@@ -193,8 +189,8 @@ def make_final_plot(gaussian_scan, cauchy_scan, width, output_path):
     ax.grid(True, alpha=0.3)
 
     ymin, ymax = ax.get_ylim()
-    ax.set_ylim(ymin - 0.20 * (ymax - ymin), ymax)
-    ax.legend(fontsize=22, ncol=2, loc="lower center")
+    ax.set_ylim(ymin - 0.23 * (ymax - ymin), ymax)
+    ax.legend(fontsize=22, ncol=2, loc="lower center", bbox_to_anchor=(0.415, 0.00))
 
     ratio_ax = axes[1]
     for scan, color in ((gaussian_scan, "C0"), (cauchy_scan, "C1")):
@@ -226,9 +222,9 @@ def main():
     os.makedirs(PLOT_FOLDER, exist_ok=True)
 
     data = make_mock_data()
-    width = float(os.environ.get("ILT_SIP_WIDTH", "0.5"))
-    n_centers = int(os.environ.get("ILT_SIP_NCENTERS", "50"))
-    center_max = float(os.environ.get("ILT_SIP_CENTER_MAX", "2.2"))
+    width = float(os.environ.get("ILT_SIP_WIDTH", "0.300"))
+    n_centers = int(os.environ.get("ILT_SIP_NCENTERS", "100"))
+    center_max = float(os.environ.get("ILT_SIP_CENTER_MAX", "1.8"))
     cutoff = float(os.environ.get("ILT_SIP_CUTOFF", str(2.0 * numpy.max(data["energies"]))))
     output_path = os.environ.get("ILT_SIP_OUTPUT", os.path.join(PLOT_FOLDER, "sip_ILT.pdf"))
     settings = {
@@ -237,6 +233,9 @@ def main():
         "n_check": int(os.environ.get("ILT_SIP_N_CHECK", "5000")),
         "max_iters": int(os.environ.get("ILT_SIP_MAX_ITERS", "60")),
         "violation_tol": float(os.environ.get("ILT_SIP_VIOLATION_TOL", "3e-8")),
+        # Sharper smearing widths require finer correction/certificate grids due to narrower features
+        "correction_n_check": int(os.environ.get("ILT_SIP_CORRECTION_N_CHECK", "24000")),
+        "margin_n_check": int(os.environ.get("ILT_SIP_MARGIN_N_CHECK", "16000")),
     }
 
     centers = numpy.linspace(0.01, center_max, n_centers)

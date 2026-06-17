@@ -1237,7 +1237,7 @@ def optimize_t0_correction(
     result : ILTDualResult
         Raw upper or lower dual result.
     t0_candidates : array_like, optional
-        Candidate times. If omitted, use problem.t_values by default, optionally excluding t=0.
+        Candidate times. If omitted, use entries of ``problem.t_values`` by default, optionally excluding an existing ``t=0`` entry.
     include_t0_zero : bool, optional
         Whether the default candidate list may include t=0. Default is True.
     correction_n_check, margin_n_check, tol
@@ -1285,9 +1285,33 @@ def optimize_t0_correction(
             passed_candidates.append(entry)
 
     if len(passed_candidates) == 0:
+        failed_summaries = []
+        for t0, correction, certificate in candidates:
+            if not numpy.isfinite(correction.corrected_value):
+                reason = "non-finite corrected value"
+            elif require_certificate and not certificate.passed:
+                reason = (
+                    "certificate failed "
+                    f"(min_margin={certificate.min_margin:.6e}, "
+                    f"worst_omega={certificate.worst_omega:.6e})"
+                )
+            else:
+                reason = "not usable"
+
+            failed_summaries.append(
+                f"t0={t0:.6g}: {reason}, "
+                f"eta={correction.eta:.6e}, "
+                f"corrected_value={correction.corrected_value:.6e}"
+            )
+
+        detail = "; ".join(failed_summaries)
+        if errors:
+            detail = f"{detail}; errors={errors}" if detail else f"errors={errors}"
+
         raise RuntimeError(
             "[optimize_t0_correction] no usable t0 candidate found; "
-            f"tried {list(numpy.asarray(t0_candidates, dtype=float))}; errors={errors}"
+            f"tried {list(numpy.asarray(t0_candidates, dtype=float))}. "
+            f"Candidate diagnostics: {detail}"
         )
 
     if result.bound_type == "upper":
