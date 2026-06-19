@@ -5,8 +5,7 @@ transition kernels between smeared spectral densities. It implements analytic
 RK-style transitions, semi-infinite-programming (SIP) bounds with CVXPY
 certificates, bounded-data helpers, and the plotting scripts used to reproduce
 the figures of the paper
-[Kernel Transformations etc...](https://arxiv.org/abs/1504.00108).
-[INSERT CORRECT LINK!!!!!]
+[Kernel Transformations and bounds for smeared spectral functions](https://arxiv.org/abs/2606.19503).
 
 The main workflows currently cover:
 
