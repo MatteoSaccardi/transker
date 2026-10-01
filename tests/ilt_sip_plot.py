@@ -18,16 +18,21 @@ from modules.kernels import cauchy_np, gaussian_np
 PLOT_FOLDER = "../paperplots/ilt_sip"
 
 
-def make_mock_data():
-    nt = 16
-    energy_threshold = 2 * 0.135
+def make_mock_data(nt=16, base_rel_err=0.001, last_rel_err=None):
+    m = 0.135
+    energy_threshold = 2 * m
     energy_spacing = 0.020
     n_state = 100
     gamma_inv = 1.3
     gamma = 1.0 / gamma_inv
     s_floor = 0.5
-    base_rel_err = 0.005
-    noise_growth_rate = energy_threshold
+    # Fix the variance to decay like exp(-2mt), C_t like exp(-E0 t), 
+    # and below we define covariance with variance exp(+2Delta_m * t) C_t^2 ~ exp(-2(E0-Delta_m) t)
+    # ==> m = E0 - Delta_m ==> Delta_m = E0 - m
+    E0 = energy_threshold + energy_spacing
+    Delta_m = E0 - m
+    if last_rel_err is not None:
+        base_rel_err = last_rel_err * numpy.exp(-Delta_m * nt)
     random_seed = 42
 
     k = numpy.arange(n_state)
@@ -44,7 +49,7 @@ def make_mock_data():
     t_values = numpy.arange(1, nt + 1, dtype=float)
     c_true = correlator_from_peaks(t_values, energies, weights)
 
-    rel_err = base_rel_err * numpy.exp(noise_growth_rate * t_values)
+    rel_err = base_rel_err * numpy.exp(Delta_m * t_values)
     covariance = numpy.zeros((nt, nt))
     for i in range(nt):
         for j in range(nt):
@@ -218,10 +223,54 @@ def make_final_plot(gaussian_scan, cauchy_scan, width, output_path):
     return fig
 
 
+def make_nt_plot(gaussian_scan, cauchy_scan, nt_values, center, width, output_path):
+    plt.rcParams.update({"font.size": 15})
+    plt.rc("text", usetex=shutil.which("latex") is not None)
+    plt.rc("font", family="serif")
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for scan, color, label, label_sip in (
+        (
+            gaussian_scan,
+            "C0",
+            r"$\rho_\sigma^{\mathtt{g}}(\omega^\prime)$",
+            r"$\rho[\delta_\sigma^{\mathtt{g}}]_\pm^{\mathrm{rig}}(\omega^\prime)$",
+        ),
+        (
+            cauchy_scan,
+            "C1",
+            r"$\rho_\sigma^{\mathtt{c}}(\omega^\prime)$",
+            r"$\rho[\delta_\sigma^{\mathtt{c}}]_\pm^{\mathrm{rig}}(\omega^\prime)$",
+        ),
+    ):
+        x = nt_values
+        ax.axhline(scan["exact_full"][0], color=color, lw=2, label=label)
+        ax.fill_between(x, scan["lower"], scan["upper"], color=color, alpha=0.20, linewidth=0, label=label_sip)
+        lower = scan["lower"]
+        upper = scan["upper"]
+        midpoint = (lower + upper) / 2
+        ax.errorbar(x, midpoint, yerr=(upper - lower) / 2, fmt="none", ecolor=color, capsize=5, elinewidth=1.5, capthick=1.5)
+
+    ax.set_ylabel(r"$\rho[\kappa]$", fontsize=24)
+    ax.grid(True, alpha=0.3)
+
+    ymin, ymax = ax.get_ylim()
+    ax.set_ylim(ymin - 0.23 * (ymax - ymin), ymax)
+    ax.legend(fontsize=22, ncol=2, loc="lower center", bbox_to_anchor=(0.415, 0.00))
+
+    ax.set_xlabel(r"$N_t$", fontsize=24)
+    ax.set_xticks(nt_values)
+    ax.text(0.97, 0.10, rf"$\omega'/\sigma={center / width:.2f}$",
+            transform=ax.transAxes, ha="right", va="bottom", fontsize=22,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="gray"))
+    plt.tight_layout()
+    fig.savefig(output_path, bbox_inches="tight")
+    return fig
+
+
 def main():
     os.makedirs(PLOT_FOLDER, exist_ok=True)
 
-    data = make_mock_data()
+    data = make_mock_data(nt=24, last_rel_err=0.30)
     width = float(os.environ.get("ILT_SIP_WIDTH", "0.300"))
     n_centers = int(os.environ.get("ILT_SIP_NCENTERS", "100"))
     center_max = float(os.environ.get("ILT_SIP_CENTER_MAX", "1.8"))
@@ -245,6 +294,24 @@ def main():
     cauchy_scan = scan_centers_for_kernel(data, "cauchy", centers, width, cutoff, settings)
     make_final_plot(gaussian_scan, cauchy_scan, width, output_path)
     print(f"[ilt-sip-plot] wrote {output_path}")
+
+    nt_values = [12, 16, 20, 24, 28, 32, 36, 40]
+    center = 0.770
+    # Generate once per Nt, sharing the data between the two kernels.
+    nt_data = [make_mock_data(nt=nt, last_rel_err=0.30) for nt in nt_values]
+    nt_scans = {}
+    for kind in KERNEL_SPECS:
+        rows = []
+        for nt, sample in zip(nt_values, nt_data):
+            row = solve_kernel_case(sample, kind, center, width, cutoff, settings)
+            rows.append((row["exact_full"], row["lower"], row["upper"]))
+            print(f"[ilt-sip-plot] {kind:8s} Nt={nt} ({nt_values.index(nt) + 1}/{len(nt_values)})", flush=True, end="\r")
+        print(" " * 100, end="\r")
+        print(f"[ilt-sip-plot] {kind:8s} Nt scan complete")
+        nt_scans[kind] = numpy.array(rows, dtype=[("exact_full", float), ("lower", float), ("upper", float)])
+    nt_output_path = os.path.join(PLOT_FOLDER, "sip_ILT_Nt.pdf")
+    make_nt_plot(nt_scans["gaussian"], nt_scans["cauchy"], nt_values, center, width, nt_output_path)
+    print(f"[ilt-sip-plot] wrote {nt_output_path}")
 
 
 if __name__ == "__main__":

@@ -59,9 +59,10 @@ def main():
     plt.figure(figsize=(10,6))
     plt.plot(omegas, gaussians, label=r'$\varepsilon/\sigma=0$', 
              color='C0', linewidth=3)
+    linestyles = ['--', '-', '--']
     for ieps,eps in enumerate(epsilons):
         plt.plot(omegas, K_gauss_values[ieps], 
-                 label=rf'$\varepsilon/\sigma={eps:.2f}$', color=f'C{ieps+1}', linewidth=3)
+                 label=rf'$\varepsilon/\sigma={eps:.2f}$', color=f'C{ieps+1}', linewidth=3, linestyle=linestyles[ieps])
     plt.legend(fontsize=26)
     plt.xlabel(r"$(\omega'-\omega)/\sigma$", fontsize=26)
     plt.ylabel(r"$K_{\sigma \leftarrow \varepsilon}^{\mathtt{g} \leftarrow \mathtt{c}}(\omega'-\omega)$", 
